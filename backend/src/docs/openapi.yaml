@@ -1,0 +1,2094 @@
+openapi: 3.0.3
+info:
+  title: AapdaSetu API
+  description: >
+    Backend API for AapdaSetu - Assam Disaster Intelligence Platform.
+    Coordinates disaster reporting, relief shelters, resources, volunteers,
+    tasks, donations and public alerts across roles (Citizen, Volunteer,
+    Authority, Admin).
+
+
+    All responses share a common envelope: `{ "success": true, "data": ... }`
+    on success, and `{ "success": false, "message": "..." }` on error. List
+    endpoints additionally return `count`, `total`, `page` and `pages`.
+
+
+    Authenticate by logging in or registering, then send the returned JWT as
+    `Authorization: Bearer <token>` on subsequent requests.
+  version: "1.0.0"
+  contact:
+    name: AapdaSetu Backend
+servers:
+  - url: http://localhost:5000
+    description: Local development
+  - url: /
+    description: Current host
+
+tags:
+  - name: Auth
+    description: Registration, login and the current user's own profile
+  - name: Users
+    description: Admin-only user management
+  - name: Disasters
+    description: Disaster/incident reporting and lifecycle
+  - name: Alerts
+    description: Public emergency alerts
+  - name: Shelters
+    description: Relief shelters and occupancy
+  - name: Volunteers
+    description: Volunteer registration and assignment
+  - name: Resources
+    description: Relief supply inventory
+  - name: Tasks
+    description: Work assigned to volunteers/authorities
+  - name: Donations
+    description: Cash and in-kind donations
+  - name: Dashboard
+    description: Cross-module aggregated statistics
+  - name: Notifications
+    description: The current user's notification feed
+  - name: Health
+    description: Service health check
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- Health
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: API is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  message: { type: string, example: AapdaSetu API is running }
+
+  # ---------------------------------------------------------------- Auth
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      description: Self-registration only allows the Citizen, Volunteer and Authority roles. Admin accounts must be created separately.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string, example: Anup Kalita }
+                email: { type: string, format: email, example: anup@example.com }
+                password: { type: string, format: password, minLength: 6, example: Password123 }
+                role: { type: string, enum: [Citizen, Volunteer, Authority], example: Citizen }
+                district: { type: string, example: Nagaon }
+                phone: { type: string, example: "9800000006" }
+      responses:
+        "201":
+          description: User created, returns an auth token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Login successful, returns an auth token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the logged-in user's profile
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [Auth]
+      summary: Update the logged-in user's name, district or phone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                district: { type: string }
+                phone: { type: string }
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/auth/me/password:
+    put:
+      tags: [Auth]
+      summary: Update the logged-in user's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string, format: password }
+                newPassword: { type: string, format: password, minLength: 6 }
+      responses:
+        "200":
+          description: Password updated, returns a fresh token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  message: { type: string, example: Password updated successfully }
+                  data:
+                    type: object
+                    properties:
+                      token: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ---------------------------------------------------------------- Users
+  /api/users:
+    get:
+      tags: [Users]
+      summary: List users (Admin only)
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: role
+          in: query
+          schema: { type: string, enum: [Citizen, Authority, Volunteer, Admin] }
+        - name: status
+          in: query
+          schema: { type: string, enum: [Active, Blocked] }
+        - name: district
+          in: query
+          schema: { type: string }
+        - name: search
+          in: query
+          description: Case-insensitive match against name or email
+          schema: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/UserList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/users/stats/summary:
+    get:
+      tags: [Users]
+      summary: User counts by role/status (Admin only)
+      responses:
+        "200": { description: Aggregated stats }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/users/{id}:
+    get:
+      tags: [Users]
+      summary: Get a user by ID (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Users]
+      summary: Delete a user (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/users/{id}/role:
+    patch:
+      tags: [Users]
+      summary: Change a user's role (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [Citizen, Authority, Volunteer, Admin] }
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/users/{id}/status:
+    patch:
+      tags: [Users]
+      summary: Block or unblock a user (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [Active, Blocked] }
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ------------------------------------------------------------ Disasters
+  /api/disasters:
+    get:
+      tags: [Disasters]
+      summary: List disasters (filter + paginate)
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/DisasterStatus" }
+        - name: type
+          in: query
+          schema: { $ref: "#/components/schemas/HazardType" }
+        - name: severity
+          in: query
+          schema: { $ref: "#/components/schemas/Severity" }
+        - name: mine
+          in: query
+          description: "If \"true\", only disasters reported by the current user"
+          schema: { type: string, enum: ["true", "false"] }
+        - name: search
+          in: query
+          description: Case-insensitive match against location
+          schema: { type: string }
+      responses:
+        "200":
+          description: Paginated list of disasters
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Disaster" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Disasters]
+      summary: Report a new disaster/incident
+      description: Any authenticated user may report an incident.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DisasterInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Disaster" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/disasters/stats/summary:
+    get:
+      tags: [Disasters]
+      summary: Disaster counts by status/type/severity (Authority, Admin)
+      responses:
+        "200": { description: Aggregated stats }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/disasters/nearby:
+    get:
+      tags: [Disasters]
+      summary: Find disasters near a point (2dsphere geo query)
+      parameters:
+        - $ref: "#/components/parameters/lat"
+        - $ref: "#/components/parameters/lng"
+        - $ref: "#/components/parameters/maxDistance"
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/DisasterStatus" }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        "200":
+          description: Disasters ordered by distance, closest first. Each item includes a `distanceMeters` field.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  count: { type: integer }
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Disaster" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/disasters/{id}:
+    get:
+      tags: [Disasters]
+      summary: Get a disaster by ID
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Disaster
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Disaster" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Disasters]
+      summary: Update a disaster (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DisasterInput" }
+      responses:
+        "200":
+          description: Updated disaster
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Disaster" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Disasters]
+      summary: Delete a disaster (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/disasters/{id}/status:
+    patch:
+      tags: [Disasters]
+      summary: Verify, assign a team to, or resolve a disaster (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { $ref: "#/components/schemas/DisasterStatus" }
+                team: { type: string, example: Guwahati Flood Response Team }
+      responses:
+        "200":
+          description: Updated disaster
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Disaster" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/disasters/{id}/images:
+    post:
+      tags: [Disasters]
+      summary: Upload evidence photos for a disaster (up to 5, 5MB each)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                images:
+                  type: array
+                  items: { type: string, format: binary }
+      responses:
+        "200":
+          description: Updated disaster with new image URLs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Disaster" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Disasters]
+      summary: Remove one evidence photo from a disaster
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: imageUrl
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated disaster
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Disaster" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---------------------------------------------------------------- Alerts
+  /api/alerts:
+    get:
+      tags: [Alerts]
+      summary: List public emergency alerts
+      description: No authentication required.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: active
+          in: query
+          schema: { type: string, enum: ["true", "false"], default: "true" }
+        - name: type
+          in: query
+          schema: { $ref: "#/components/schemas/HazardType" }
+        - name: priority
+          in: query
+          schema: { $ref: "#/components/schemas/Severity" }
+      responses:
+        "200":
+          description: Paginated list of alerts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Alert" }
+    post:
+      tags: [Alerts]
+      summary: Issue a new alert (Authority, Admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlertInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Alert" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/alerts/stats/summary:
+    get:
+      tags: [Alerts]
+      summary: Alert counts by type/priority (Authority, Admin)
+      responses:
+        "200": { description: Aggregated stats }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/alerts/{id}:
+    get:
+      tags: [Alerts]
+      summary: Get an alert by ID
+      security: []
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Alert
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Alert" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Alerts]
+      summary: Update an alert (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlertInput" }
+      responses:
+        "200":
+          description: Updated alert
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Alert" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Alerts]
+      summary: Delete an alert (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/alerts/{id}/deactivate:
+    patch:
+      tags: [Alerts]
+      summary: Deactivate an alert (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Updated alert
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Alert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------------------------------------------------------------- Shelters
+  /api/shelters:
+    get:
+      tags: [Shelters]
+      summary: List shelters
+      description: No authentication required.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: status
+          in: query
+          schema: { type: string, enum: [Active, Full, Closed] }
+        - name: search
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Paginated list of shelters
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Shelter" }
+    post:
+      tags: [Shelters]
+      summary: Create a shelter (Authority, Admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ShelterInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Shelter" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/shelters/nearby:
+    get:
+      tags: [Shelters]
+      summary: Find shelters near a point (2dsphere geo query)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/lat"
+        - $ref: "#/components/parameters/lng"
+        - $ref: "#/components/parameters/maxDistance"
+        - name: status
+          in: query
+          schema: { type: string, enum: [Active, Full, Closed] }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        "200":
+          description: Shelters ordered by distance, closest first. Each item includes a `distanceMeters` field.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  count: { type: integer }
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Shelter" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+
+  /api/shelters/stats/summary:
+    get:
+      tags: [Shelters]
+      summary: Shelter capacity/occupancy stats (Authority, Admin)
+      responses:
+        "200": { description: Aggregated stats }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/shelters/{id}:
+    get:
+      tags: [Shelters]
+      summary: Get a shelter by ID
+      security: []
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Shelter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Shelter" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Shelters]
+      summary: Update a shelter (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ShelterInput" }
+      responses:
+        "200":
+          description: Updated shelter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Shelter" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Shelters]
+      summary: Delete a shelter (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/shelters/{id}/occupancy:
+    patch:
+      tags: [Shelters]
+      summary: Update current occupancy (Authority, Admin). Status auto-flips to Full at capacity.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentOccupancy]
+              properties:
+                currentOccupancy: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Updated shelter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Shelter" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/shelters/{id}/images:
+    post:
+      tags: [Shelters]
+      summary: Upload shelter photos (Authority, Admin; up to 5, 5MB each)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                images:
+                  type: array
+                  items: { type: string, format: binary }
+      responses:
+        "200":
+          description: Updated shelter with new image URLs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Shelter" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Shelters]
+      summary: Remove one photo from a shelter (Authority, Admin)
+      parameters:
+        - { $ref: "#/components/parameters/id" }
+        - name: imageUrl
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated shelter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Shelter" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ------------------------------------------------------------ Volunteers
+  /api/volunteers:
+    get:
+      tags: [Volunteers]
+      summary: List volunteer profiles (Authority, Admin)
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: status
+          in: query
+          schema: { type: string, enum: [Pending, Approved, Rejected, Inactive] }
+        - name: availability
+          in: query
+          schema: { type: string, enum: [Available, Unavailable] }
+        - name: district
+          in: query
+          schema: { type: string }
+        - name: skill
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Paginated list of volunteers
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Volunteer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Volunteers]
+      summary: Register the current user as a volunteer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                skills: { type: array, items: { type: string } }
+                district: { type: string }
+                availability: { type: string, enum: [Available, Unavailable] }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Volunteer" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/volunteers/stats/summary:
+    get:
+      tags: [Volunteers]
+      summary: Volunteer counts by status/availability (Authority, Admin)
+      responses:
+        "200": { description: Aggregated stats }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/volunteers/me:
+    get:
+      tags: [Volunteers]
+      summary: Get the current user's own volunteer profile
+      responses:
+        "200":
+          description: Volunteer profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Volunteer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Volunteers]
+      summary: Update the current user's own volunteer profile
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                skills: { type: array, items: { type: string } }
+                district: { type: string }
+                availability: { type: string, enum: [Available, Unavailable] }
+      responses:
+        "200":
+          description: Updated volunteer profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Volunteer" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/volunteers/{id}:
+    get:
+      tags: [Volunteers]
+      summary: Get a volunteer profile by ID (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Volunteer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Volunteer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Volunteers]
+      summary: Delete a volunteer profile (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/volunteers/{id}/status:
+    patch:
+      tags: [Volunteers]
+      summary: Approve, reject, or deactivate a volunteer (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [Pending, Approved, Rejected, Inactive] }
+      responses:
+        "200":
+          description: Updated volunteer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Volunteer" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/volunteers/{id}/assign:
+    patch:
+      tags: [Volunteers]
+      summary: Assign a volunteer to a disaster and/or shelter (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                assignedDisaster: { type: string, description: Disaster ObjectId }
+                assignedShelter: { type: string, description: Shelter ObjectId }
+      responses:
+        "200":
+          description: Updated volunteer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Volunteer" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------------------------------------------------------------- Resources
+  /api/resources:
+    get:
+      tags: [Resources]
+      summary: List relief resources
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: category
+          in: query
+          schema: { $ref: "#/components/schemas/ResourceCategory" }
+        - name: status
+          in: query
+          schema: { type: string, enum: [Available, Low, Depleted] }
+        - name: shelter
+          in: query
+          schema: { type: string, description: Shelter ObjectId }
+        - name: disaster
+          in: query
+          schema: { type: string, description: Disaster ObjectId }
+        - name: search
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Paginated list of resources
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Resource" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Resources]
+      summary: Add a resource entry (Authority, Admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Resource" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/resources/stats/summary:
+    get:
+      tags: [Resources]
+      summary: Resource counts/quantities by category, low-stock count (Authority, Admin)
+      responses:
+        "200": { description: Aggregated stats }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/resources/{id}:
+    get:
+      tags: [Resources]
+      summary: Get a resource by ID
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Resource
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Resource" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Resources]
+      summary: Update a resource (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceInput" }
+      responses:
+        "200":
+          description: Updated resource
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Resource" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Resources]
+      summary: Delete a resource (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/resources/{id}/quantity:
+    patch:
+      tags: [Resources]
+      summary: Adjust resource quantity, e.g. after distribution or restock (Authority, Admin)
+      description: Status (Available/Low/Depleted) recalculates automatically against `lowStockThreshold`.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity]
+              properties:
+                quantity: { type: integer, minimum: 0, description: New absolute quantity }
+      responses:
+        "200":
+          description: Updated resource
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Resource" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ------------------------------------------------------------------ Tasks
+  /api/tasks:
+    get:
+      tags: [Tasks]
+      summary: List tasks (Authority, Admin)
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: status
+          in: query
+          schema: { type: string, enum: [Pending, In Progress, Completed, Cancelled] }
+        - name: priority
+          in: query
+          schema: { $ref: "#/components/schemas/Severity" }
+        - name: category
+          in: query
+          schema: { $ref: "#/components/schemas/TaskCategory" }
+        - name: assignedTo
+          in: query
+          schema: { type: string, description: User ObjectId }
+        - name: disaster
+          in: query
+          schema: { type: string, description: Disaster ObjectId }
+        - name: shelter
+          in: query
+          schema: { type: string, description: Shelter ObjectId }
+      responses:
+        "200":
+          description: Paginated list of tasks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Task" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Tasks]
+      summary: Create a task (Authority, Admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/tasks/stats/summary:
+    get:
+      tags: [Tasks]
+      summary: Task counts by status, overdue count (Authority, Admin)
+      responses:
+        "200": { description: Aggregated stats }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/tasks/me:
+    get:
+      tags: [Tasks]
+      summary: List tasks assigned to the current user
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: status
+          in: query
+          schema: { type: string, enum: [Pending, In Progress, Completed, Cancelled] }
+      responses:
+        "200":
+          description: Paginated list of the current user's tasks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Task" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/tasks/{id}:
+    get:
+      tags: [Tasks]
+      summary: Get a task by ID
+      description: Available to the assignee as well as Authority/Admin.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Task" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Tasks]
+      summary: Update a task (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskInput" }
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Tasks]
+      summary: Delete a task (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/tasks/{id}/status:
+    patch:
+      tags: [Tasks]
+      summary: Update task status
+      description: Available to the assignee as well as Authority/Admin. `completedAt` is set automatically when status becomes Completed.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [Pending, In Progress, Completed, Cancelled] }
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------------------------------------------------------------- Donations
+  /api/donations:
+    get:
+      tags: [Donations]
+      summary: List all donations (Authority, Admin)
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: type
+          in: query
+          schema: { type: string, enum: [Cash, Kind] }
+        - name: status
+          in: query
+          schema: { type: string, enum: [Pending, Received, Utilized, Cancelled] }
+        - name: disaster
+          in: query
+          schema: { type: string, description: Disaster ObjectId }
+        - name: shelter
+          in: query
+          schema: { type: string, description: Shelter ObjectId }
+        - name: search
+          in: query
+          description: Case-insensitive match against donor name
+          schema: { type: string }
+      responses:
+        "200":
+          description: Paginated list of donations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Donation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Donations]
+      summary: Record a donation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DonationInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Donation" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/donations/stats/summary:
+    get:
+      tags: [Donations]
+      summary: Donation totals by type/status (Authority, Admin)
+      responses:
+        "200": { description: Aggregated stats }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/donations/me:
+    get:
+      tags: [Donations]
+      summary: List donations recorded by the current user
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: status
+          in: query
+          schema: { type: string, enum: [Pending, Received, Utilized, Cancelled] }
+      responses:
+        "200":
+          description: Paginated list of the current user's donations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Donation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/donations/{id}:
+    get:
+      tags: [Donations]
+      summary: Get a donation by ID
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Donation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Donation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Donations]
+      summary: Update a donation (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DonationInput" }
+      responses:
+        "200":
+          description: Updated donation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Donation" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Donations]
+      summary: Delete a donation (Admin only)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/donations/{id}/status:
+    patch:
+      tags: [Donations]
+      summary: Update donation status (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [Pending, Received, Utilized, Cancelled] }
+      responses:
+        "200":
+          description: Updated donation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Donation" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------------------------------------------------------------- Dashboard
+  /api/dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Cross-module aggregated counts (Authority, Admin)
+      description: Totals and breakdowns across disasters, shelters, volunteers, resources, tasks, donations, alerts and users.
+      responses:
+        "200": { description: Aggregated summary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/dashboard/trends:
+    get:
+      tags: [Dashboard]
+      summary: Daily counts over the last N days, for charts (Authority, Admin)
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 14, minimum: 1, maximum: 90 }
+      responses:
+        "200": { description: Daily trend series }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---------------------------------------------------------- Notifications
+  /api/notifications:
+    get:
+      tags: [Notifications]
+      summary: List the current user's notifications (direct + broadcast)
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/limit"
+        - name: type
+          in: query
+          schema: { type: string, enum: [Alert, Task, Donation, Disaster, Shelter, System] }
+        - name: unread
+          in: query
+          description: "If \"true\", only notifications not yet read by the current user"
+          schema: { type: string, enum: ["true", "false"] }
+      responses:
+        "200":
+          description: Paginated list of notifications
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Notification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/notifications/unread-count:
+    get:
+      tags: [Notifications]
+      summary: Get the current user's unread notification count
+      responses:
+        "200":
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      count: { type: integer, example: 3 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Mark all of the current user's notifications as read
+      responses:
+        "200": { description: All notifications marked read }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/notifications/{id}/read:
+    patch:
+      tags: [Notifications]
+      summary: Mark one notification as read
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: Updated notification
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Notification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/notifications/{id}:
+    delete:
+      tags: [Notifications]
+      summary: Delete a notification (Authority, Admin)
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200": { $ref: "#/components/responses/DeletedOk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'Send the token returned by /api/auth/login or /api/auth/register as "Authorization: Bearer <token>".'
+
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      description: MongoDB ObjectId
+      schema: { type: string, example: 65f1a2b3c4d5e6f7a8b9c0d1 }
+    page:
+      name: page
+      in: query
+      schema: { type: integer, default: 1, minimum: 1 }
+    limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 20, maximum: 100 }
+    lat:
+      name: lat
+      in: query
+      required: true
+      schema: { type: number, minimum: -90, maximum: 90, example: 26.1584 }
+    lng:
+      name: lng
+      in: query
+      required: true
+      schema: { type: number, minimum: -180, maximum: 180, example: 91.6716 }
+    maxDistance:
+      name: maxDistance
+      in: query
+      description: Search radius in meters (capped at 200000)
+      schema: { type: integer, default: 10000, minimum: 1 }
+
+  responses:
+    ValidationError:
+      description: Request failed validation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Unauthorized:
+      description: Missing, invalid or expired token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Forbidden:
+      description: Authenticated, but the user's role may not perform this action
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    NotFound:
+      description: No record with that ID
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    DeletedOk:
+      description: Deleted successfully
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success: { type: boolean, example: true }
+              message: { type: string, example: Deleted successfully }
+    UserList:
+      description: Paginated list of users
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/PaginatedEnvelope"
+              - type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/User" }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string, example: A descriptive error message }
+
+    PaginatedEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        count: { type: integer, example: 20 }
+        total: { type: integer, example: 57 }
+        page: { type: integer, example: 1 }
+        pages: { type: integer, example: 3 }
+
+    HazardType:
+      type: string
+      enum: [Flood, Cyclone, Earthquake, Landslide, Fire, Accident, Other]
+
+    Severity:
+      type: string
+      enum: [Low, Medium, High, Critical]
+
+    DisasterStatus:
+      type: string
+      enum: [Pending, Verified, In Progress, Resolved, Rejected]
+
+    ResourceCategory:
+      type: string
+      enum: [Food, Water, Medical, Clothing, Bedding, Equipment, Other]
+
+    TaskCategory:
+      type: string
+      enum: [Rescue, Relief Distribution, Medical, Logistics, Shelter Management, Other]
+
+    Coordinates:
+      type: object
+      properties:
+        lat: { type: number, example: 26.1584 }
+        lng: { type: number, example: 91.6716 }
+
+    User:
+      type: object
+      properties:
+        _id: { type: string }
+        name: { type: string, example: Anup Kalita }
+        email: { type: string, format: email }
+        role: { type: string, enum: [Citizen, Authority, Volunteer, Admin] }
+        district: { type: string }
+        phone: { type: string }
+        status: { type: string, enum: [Active, Blocked] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    AuthResponse:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            email: { type: string, format: email }
+            role: { type: string, enum: [Citizen, Authority, Volunteer, Admin] }
+            district: { type: string }
+            status: { type: string, enum: [Active, Blocked] }
+            token: { type: string, description: JWT to send as a Bearer token }
+
+    Disaster:
+      type: object
+      properties:
+        _id: { type: string }
+        disasterId: { type: string, example: DR-1001 }
+        type: { $ref: "#/components/schemas/HazardType" }
+        location: { type: string }
+        coordinates: { $ref: "#/components/schemas/Coordinates" }
+        severity: { $ref: "#/components/schemas/Severity" }
+        description: { type: string }
+        reportedBy: { type: string, description: User ObjectId (populated on list/detail views) }
+        reportedByName: { type: string }
+        status: { $ref: "#/components/schemas/DisasterStatus" }
+        team: { type: string, example: Guwahati Flood Response Team }
+        verifiedBy: { type: string, description: User ObjectId }
+        images: { type: array, items: { type: string, format: uri } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    DisasterInput:
+      type: object
+      required: [type, location]
+      properties:
+        type: { $ref: "#/components/schemas/HazardType" }
+        location: { type: string, example: "Pandu Ghat, Guwahati" }
+        coordinates: { $ref: "#/components/schemas/Coordinates" }
+        severity: { $ref: "#/components/schemas/Severity" }
+        description: { type: string }
+        images: { type: array, items: { type: string, format: uri } }
+
+    Shelter:
+      type: object
+      properties:
+        _id: { type: string }
+        shelterId: { type: string, example: SH-501 }
+        name: { type: string }
+        location: { type: string }
+        coordinates: { $ref: "#/components/schemas/Coordinates" }
+        capacity: { type: integer }
+        currentOccupancy: { type: integer }
+        resources:
+          type: object
+          properties:
+            food: { type: boolean }
+            water: { type: boolean }
+            medical: { type: boolean }
+            bedding: { type: boolean }
+        contactPerson: { type: string }
+        contactPhone: { type: string }
+        images: { type: array, items: { type: string, format: uri } }
+        status: { type: string, enum: [Active, Full, Closed] }
+        managedBy: { type: string, description: User ObjectId }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ShelterInput:
+      type: object
+      required: [name, location, capacity]
+      properties:
+        name: { type: string }
+        location: { type: string }
+        coordinates: { $ref: "#/components/schemas/Coordinates" }
+        capacity: { type: integer, minimum: 0 }
+        contactPerson: { type: string }
+        contactPhone: { type: string }
+        resources:
+          type: object
+          properties:
+            food: { type: boolean }
+            water: { type: boolean }
+            medical: { type: boolean }
+            bedding: { type: boolean }
+
+    Resource:
+      type: object
+      properties:
+        _id: { type: string }
+        resourceId: { type: string, example: RS-701 }
+        name: { type: string }
+        category: { $ref: "#/components/schemas/ResourceCategory" }
+        quantity: { type: integer }
+        unit: { type: string }
+        lowStockThreshold: { type: integer }
+        status: { type: string, enum: [Available, Low, Depleted] }
+        shelter: { type: string, nullable: true, description: Shelter ObjectId }
+        disaster: { type: string, nullable: true, description: Disaster ObjectId }
+        location: { type: string }
+        addedBy: { type: string, description: User ObjectId }
+        notes: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ResourceInput:
+      type: object
+      required: [name, quantity]
+      properties:
+        name: { type: string }
+        category: { $ref: "#/components/schemas/ResourceCategory" }
+        quantity: { type: integer, minimum: 0 }
+        unit: { type: string }
+        lowStockThreshold: { type: integer, minimum: 0 }
+        shelter: { type: string, description: Shelter ObjectId }
+        disaster: { type: string, description: Disaster ObjectId }
+        location: { type: string }
+        notes: { type: string }
+
+    Task:
+      type: object
+      properties:
+        _id: { type: string }
+        taskId: { type: string, example: TK-901 }
+        title: { type: string }
+        description: { type: string }
+        category: { $ref: "#/components/schemas/TaskCategory" }
+        priority: { $ref: "#/components/schemas/Severity" }
+        status: { type: string, enum: [Pending, In Progress, Completed, Cancelled] }
+        assignedTo: { type: string, nullable: true, description: User ObjectId }
+        assignedBy: { type: string, description: User ObjectId }
+        relatedDisaster: { type: string, nullable: true, description: Disaster ObjectId }
+        relatedShelter: { type: string, nullable: true, description: Shelter ObjectId }
+        dueDate: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        notes: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    TaskInput:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        category: { $ref: "#/components/schemas/TaskCategory" }
+        priority: { $ref: "#/components/schemas/Severity" }
+        assignedTo: { type: string, description: User ObjectId }
+        relatedDisaster: { type: string, description: Disaster ObjectId }
+        relatedShelter: { type: string, description: Shelter ObjectId }
+        dueDate: { type: string, format: date-time }
+        notes: { type: string }
+
+    Volunteer:
+      type: object
+      properties:
+        _id: { type: string }
+        volunteerId: { type: string, example: VL-201 }
+        user: { type: string, description: User ObjectId (populated on list/detail views) }
+        skills: { type: array, items: { type: string } }
+        district: { type: string }
+        availability: { type: string, enum: [Available, Unavailable] }
+        status: { type: string, enum: [Pending, Approved, Rejected, Inactive] }
+        assignedDisaster: { type: string, nullable: true, description: Disaster ObjectId }
+        assignedShelter: { type: string, nullable: true, description: Shelter ObjectId }
+        verifiedBy: { type: string, description: User ObjectId }
+        notes: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Donation:
+      type: object
+      properties:
+        _id: { type: string }
+        donationId: { type: string, example: DN-2001 }
+        donorName: { type: string }
+        donorEmail: { type: string, format: email }
+        donorPhone: { type: string }
+        type: { type: string, enum: [Cash, Kind] }
+        amount: { type: number, description: Required and > 0 when type is Cash }
+        paymentMethod: { type: string, enum: [UPI, Bank Transfer, Card, Cash, Other] }
+        transactionId: { type: string }
+        itemName: { type: string, description: Required when type is Kind }
+        quantity: { type: number, description: Required and > 0 when type is Kind }
+        unit: { type: string }
+        relatedDisaster: { type: string, nullable: true, description: Disaster ObjectId }
+        relatedShelter: { type: string, nullable: true, description: Shelter ObjectId }
+        status: { type: string, enum: [Pending, Received, Utilized, Cancelled] }
+        receivedBy: { type: string, nullable: true, description: User ObjectId }
+        recordedBy: { type: string, description: User ObjectId }
+        notes: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    DonationInput:
+      type: object
+      required: [donorName, type]
+      properties:
+        donorName: { type: string }
+        donorEmail: { type: string, format: email }
+        donorPhone: { type: string }
+        type: { type: string, enum: [Cash, Kind] }
+        amount: { type: number, description: Required when type is Cash }
+        paymentMethod: { type: string, enum: [UPI, Bank Transfer, Card, Cash, Other] }
+        transactionId: { type: string }
+        itemName: { type: string, description: Required when type is Kind }
+        quantity: { type: number, description: Required when type is Kind }
+        unit: { type: string }
+        relatedDisaster: { type: string, description: Disaster ObjectId }
+        relatedShelter: { type: string, description: Shelter ObjectId }
+        notes: { type: string }
+
+    Alert:
+      type: object
+      properties:
+        _id: { type: string }
+        alertId: { type: string, example: AL-301 }
+        title: { type: string }
+        type: { $ref: "#/components/schemas/HazardType" }
+        location: { type: string }
+        priority: { $ref: "#/components/schemas/Severity" }
+        description: { type: string }
+        issuedBy: { type: string, description: User ObjectId }
+        active: { type: boolean }
+        relatedDisaster: { type: string, nullable: true, description: Disaster ObjectId }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    AlertInput:
+      type: object
+      required: [title, type, location]
+      properties:
+        title: { type: string }
+        type: { $ref: "#/components/schemas/HazardType" }
+        location: { type: string }
+        priority: { $ref: "#/components/schemas/Severity" }
+        description: { type: string }
+        relatedDisaster: { type: string, description: Disaster ObjectId }
+
+    Notification:
+      type: object
+      properties:
+        _id: { type: string }
+        notificationId: { type: string, example: NT-1 }
+        recipient: { type: string, nullable: true, description: User ObjectId; null means a broadcast notification }
+        type: { type: string, enum: [Alert, Task, Donation, Disaster, Shelter, System] }
+        title: { type: string }
+        message: { type: string }
+        relatedAlert: { type: string, nullable: true }
+        relatedTask: { type: string, nullable: true }
+        relatedDonation: { type: string, nullable: true }
+        relatedDisaster: { type: string, nullable: true }
+        relatedShelter: { type: string, nullable: true }
+        readBy: { type: array, items: { type: string }, description: User ObjectIds who have read this notification }
+        createdBy: { type: string, nullable: true, description: User ObjectId, null for system-generated notifications }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
